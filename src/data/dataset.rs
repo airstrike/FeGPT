@@ -45,15 +45,21 @@ impl WikiText2Dataset {
     }
 
     pub fn new(split: &str) -> Self {
-        let dataset: SqliteDataset<WikiText2Item> = HuggingfaceDatasetLoader::new("wikitext-2-v1")
-            .dataset(split)
-            .unwrap();
+        let dataset: SqliteDataset<WikiText2Item> =
+            // HuggingfaceDatasetLoader::new("Salesforce/wikitext")
+            // 
+            // For some reason the Salesforce variant fails to load because no auth?
+            // I don't quite follow why, so let's just use this other variant
+            HuggingfaceDatasetLoader::new("carlosejimenez/wikitext__wikitext-2-raw-v1")
+                .dataset(split)
+                .unwrap();
         Self { dataset }
     }
 }
 
-// Optional: Implement a trait for language model datasets if we want to add
-// dataset-specific functionality
+// TODO: Implement a trait for language model datasets if we want to add
+// dataset-specific functionality? TBD.
+#[allow(dead_code)]
 pub trait LanguageModelDataset: Dataset<LanguageModelItem> {
     fn vocab_size() -> usize;
     fn get_raw_text(&self, index: usize) -> Option<String>;
