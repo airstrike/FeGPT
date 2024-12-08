@@ -1,0 +1,15 @@
+[package]
+name = "fegpt"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+burn = { version = "0.15.0", features = ["ndarray", "tch", "train", "wgpu"] }
+derive-new = "0.7.0"
+rand = "0.8.5"
+serde = "1.0.215"
+serde_json = "1.0.133"
+tokenizers = { version = "0.21.0", default-features = false, features = [
+    "onig",
+    "http",
+] }
