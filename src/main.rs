@@ -4,8 +4,6 @@ extern crate derive_new;
 pub mod data;
 pub use data::tokenizer;
 pub mod model;
-pub mod sample;
-pub mod train;
 
 use burn::nn::transformer::TransformerEncoderConfig;
 use burn::optim::{decay::WeightDecayConfig, AdamConfig};
