@@ -11,6 +11,10 @@ pub struct Cli {
 pub enum Commands {
     /// Train a new model
     Train {
+        /// Dataset to use for training
+        #[arg(short, long, default_value = "aesop")]
+        dataset: String,
+
         /// Whether to use a subset of the data for quick testing
         #[arg(short, long)]
         subset: bool,

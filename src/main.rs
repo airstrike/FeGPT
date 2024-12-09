@@ -6,7 +6,6 @@ use burn::nn::transformer::TransformerEncoderConfig;
 use burn::optim::AdamConfig;
 use burn::prelude::*;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod data;
@@ -16,7 +15,7 @@ pub mod model;
 pub mod session;
 
 use cli::*;
-use data::{LanguageModelBatcher, SubDataset, Tokenizer, WikiText2Dataset};
+use data::*;
 use model::FeGPTConfig;
 use session::ModelConfig;
 use tokenizer::GPTTokenizer;
@@ -29,6 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Commands::Train {
+            dataset,
             subset,
             d_model,
             d_ff,
@@ -41,6 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..  // Handle any additional fields we haven't mapped yet
         } => {
             let (_, _) = train(
+                &dataset,
                 subset,
                 d_model,
                 d_ff,
@@ -60,9 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model,
             models_dir,
         } => {
-            // Load config to get model parameters
-            let config_path = PathBuf::from(&models_dir).join(format!("model_{}.json", model));
-            let config: ModelConfig = serde_json::from_str(&fs::read_to_string(config_path)?)?;
+            // Find model by ID or timestamp
+            let config = session::find_model(&models_dir, &model)?;
             
             // Initialize model using the saved config parameters
             let device = if cfg!(target_os = "macos") {
@@ -70,11 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 burn::tensor::Device::<Backend>::Cuda(0)
             };
-
+        
             let tokenizer = Arc::new(GPTTokenizer::default());
             let vocab_size = tokenizer.vocab_size();
             let pad_token = tokenizer.pad_token();
-
+        
             let transformer_config = TransformerEncoderConfig::new(
                 config.get_d_model(),
                 config.get_d_ff(),
@@ -83,20 +83,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_norm_first(true)
             .with_dropout(0.1);
-
+        
             let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, 64);
             let mut model = model_config.init::<Backend>(&device);
             
-            // Load the trained weights - append .mpk extension
-            let mut model_path = config.model_path(&models_dir);
-            model_path.set_extension("mpk");
-
+            // Load the trained weights
+            let model_path = config.model_path(&models_dir);
             println!("Attempting to load model from: {}", model_path.display());
-
+        
             if !model_path.exists() {
                 return Err(format!("Model file not found at {}", model_path.display()).into());
             }
-
+        
             model = model
                 .load_file(
                     model_path,
@@ -104,10 +102,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &device,
                 )
                 .expect("Failed to load model");
-
+        
             let generated = generate(&prompt, &model, &tokenizer, num_tokens, temperature);
             println!("Generated text:\n{}", generated);
         }
+        
         Commands::List { models_dir } => {
             // Try to create directory if it doesn't exist
             if let Err(e) = fs::create_dir_all(&models_dir) {
@@ -116,20 +115,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         
             match session::list_trained_models(&models_dir) {
-                Ok(configs) => {
+                Ok(entries) => {
                     println!("\nTrained models:");
-                    if configs.is_empty() {
+                    if entries.is_empty() {
                         println!("No trained models found.");
                     } else {
                         println!(
-                            "{:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
-                            "Timestamp", "Duration", "Layers", "d_model", "Heads", "Epochs", "Subset"
+                            "{:<4} {:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
+                            "ID", "Timestamp", "Duration", "Layers", "d_model", "Heads", "Epochs", "Subset"
                         );
-                        println!("{}", "-".repeat(80));
+                        println!("{}", "-".repeat(90));
         
-                        for config in configs {
+                        for entry in entries {
+                            let config = entry.config;
                             println!(
-                                "{:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
+                                "{:<4} {:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
+                                entry.id,
                                 config.get_timestamp(),
                                 config.get_duration().as_ref().unwrap_or(&"".to_string()),
                                 config.get_n_layer(),
@@ -139,6 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 config.get_subset()
                             );
                         }
+                        println!("\nUse either ID or timestamp when generating text");
                     }
                 }
                 Err(e) => {
@@ -182,6 +184,7 @@ fn generate<B: burn::tensor::backend::Backend>(
 }
 
 fn train(
+    dataset_name: &str,
     subset: bool,
     d_model: usize,
     d_ff: usize,
@@ -235,8 +238,8 @@ fn train(
         .with_model_size(128)
         .init();
 
-    let dataset_train = WikiText2Dataset::train();
-    let dataset_test = WikiText2Dataset::test();
+    let dataset_train = DatasetType::new(dataset_name, "train");
+    let dataset_test = DatasetType::new(dataset_name, "test");
     let dataset_length = dataset_train.len();
 
     let dataset_train = if subset {
