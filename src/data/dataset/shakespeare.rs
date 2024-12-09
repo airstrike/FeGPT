@@ -3,8 +3,9 @@ use burn::data::dataset::{source::huggingface::HuggingfaceDatasetLoader, Dataset
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(non_snake_case)]
 pub struct ShakespeareItem {
-    pub text: String,
+    pub Text: String,
 }
 
 #[derive(Debug)]
@@ -38,7 +39,7 @@ impl Dataset<LanguageModelItem> for ShakespeareDataset {
     fn get(&self, index: usize) -> Option<LanguageModelItem> {
         self.dataset
             .get(index)
-            .map(|item| LanguageModelItem::new(item.text))
+            .map(|item| LanguageModelItem::new(item.Text))
     }
 
     fn len(&self) -> usize {
@@ -54,6 +55,6 @@ impl LanguageModelDataset for ShakespeareDataset {
     }
 
     fn get_raw_text(&self, index: usize) -> Option<String> {
-        self.dataset.get(index).map(|item| item.text)
+        self.dataset.get(index).map(|item| item.Text)
     }
 }

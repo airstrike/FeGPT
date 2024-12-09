@@ -148,7 +148,6 @@ impl<B: Backend> FeGPT<B> {
             let probs = softmax(scaled_logits, 1);
 
             // Sample next token
-            // let next_token = probs.multinomial(1, true);
             let next_token = self.sample_multinomial(probs);
 
             // Append new token to sequence
@@ -166,7 +165,6 @@ impl<B: Backend> FeGPT<B> {
         let raw_probs = probs.to_data().to_vec::<burn::tensor::f16>().unwrap();
         let probs: Vec<f32> = raw_probs.iter().map(|x| x.to_f32()).collect();
 
-        // The rest of the code remains the same
         let mut rng = rand::thread_rng();
         let mut next_tokens = Vec::with_capacity(batch_size);
 

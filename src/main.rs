@@ -2,6 +2,7 @@
 extern crate derive_new;
 
 use burn::data::dataloader::Dataset;
+use burn::grad_clipping::GradientClippingConfig;
 use burn::lr_scheduler::LrScheduler;
 use burn::module::AutodiffModule;
 use burn::nn::transformer::TransformerEncoderConfig;
@@ -18,7 +19,6 @@ pub mod data;
 pub mod model;
 pub mod perplexity;
 pub mod session;
-pub mod utils;
 
 use cli::*;
 pub use data::tokenizer;
@@ -260,7 +260,11 @@ fn train(
 
     let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, block_size);
 
-    let mut optimizer = AdamConfig::new().with_beta_2(0.99).init();
+    let clipping = GradientClippingConfig::Norm(1.0);
+    let mut optimizer = AdamConfig::new()
+        .with_beta_2(0.99)
+        .with_grad_clipping(Some(clipping))
+        .init();
 
     let mut lr_scheduler = burn::lr_scheduler::noam::NoamLrSchedulerConfig::new(learning_rate)
         .with_warmup_steps(warmup_steps)
@@ -309,7 +313,6 @@ fn train(
 
             let grads = loss.backward();
             let grads = burn::optim::GradientsParams::from_grads(grads, &model);
-            let grads = utils::clip_gradients(grads, &model, 1.0); // Using 1.0 as max_norm like nanoGPT
             model = optimizer.step(learning_rate, model, grads);
 
             // Update learning rate
