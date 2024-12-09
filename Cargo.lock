@@ -1550,6 +1550,7 @@ dependencies = [
  "burn",
  "chrono",
  "clap",
+ "crossterm",
  "derive-new 0.7.0",
  "glob",
  "rand",

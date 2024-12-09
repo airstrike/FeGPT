@@ -10,7 +10,6 @@ use burn::optim::{AdamConfig, Optimizer};
 use burn::prelude::*;
 use burn::train::metric::Adaptor;
 use burn::train::ClassificationOutput;
-use perplexity::PerplexityInput;
 use std::fs;
 use std::sync::Arc;
 
@@ -24,6 +23,7 @@ use cli::*;
 pub use data::tokenizer;
 use data::*;
 use model::FeGPTConfig;
+use perplexity::PerplexityInput;
 use session::{ModelConfig, TrainingMetrics};
 use tokenizer::GPTTokenizer;
 
@@ -254,7 +254,7 @@ fn train(
     let vocab_size = tokenizer.vocab_size();
     let pad_token = tokenizer.pad_token();
 
-    let transformer_config = TransformerEncoderConfig::new(d_model, d_ff, n_layer, n_head)
+    let transformer_config = TransformerEncoderConfig::new(d_model, d_ff, n_head, n_layer)
         .with_norm_first(true)
         .with_dropout(dropout);
 
@@ -273,6 +273,7 @@ fn train(
 
     let dataset_train = DatasetType::new(dataset_name, "train");
     let dataset_test = DatasetType::new(dataset_name, "test");
+    let dataset_length = dataset_train.len();
 
     // Calculate number of epochs based on max_iters and batch size
     let total_batches = dataset_train.len() / batch_size;
@@ -305,6 +306,7 @@ fn train(
     };
 
     let mut step = 0;
+    let mut progress = ProgressIndicator::new(max_iters, epochs, dataset_length, batch_size);
     for epoch in 0..epochs {
         // Training loop
         for batch in dataloader_train.iter() {
@@ -326,6 +328,8 @@ fn train(
             metrics.final_perplexity = (perplexity_input.loss as f64).exp();
             metrics.total_steps = step;
 
+            progress.update(&metrics)?;
+
             step += 1;
             if step >= max_iters {
                 break;
@@ -334,6 +338,7 @@ fn train(
         metrics.total_epochs = epoch + 1;
 
         // Validation loop
+        progress.set_mode("Validating");
         let model_valid = model.valid();
         let mut val_losses = Vec::new();
         let mut val_perplexities = Vec::new();
@@ -352,20 +357,10 @@ fn train(
                 val_perplexities.iter().sum::<f64>() / val_perplexities.len() as f64;
         }
 
-        println!(
-                "Epoch {}/{} - Step {} - Train Loss: {:.4} - Train PPL: {:.4} - Val Loss: {:.4} - Val PPL: {:.4}",
-                epoch + 1,
-                epochs,
-                step,
-                metrics.final_loss,
-                metrics.final_perplexity,
-                metrics.validation_loss,
-                metrics.validation_perplexity
-            );
-
         if step >= max_iters {
             break;
         }
+        progress.set_mode("Training");
     }
 
     // Update config with training duration and save everything
@@ -383,4 +378,85 @@ fn train(
         .expect("Failed to save model");
 
     Ok((model, tokenizer, metrics))
+}
+
+use crossterm::{
+    cursor, execute,
+    terminal::{Clear, ClearType},
+};
+use std::io::{self, Write};
+use std::time::Instant;
+
+const UPDATE_FREQUENCY: usize = 50;
+
+pub struct ProgressIndicator {
+    start_time: Instant,
+    total_steps: usize,
+    total_epochs: usize,
+    total_items: usize,
+    batch_size: usize,
+    last_update: usize,
+    mode: &'static str,
+}
+
+impl ProgressIndicator {
+    pub fn new(
+        total_steps: usize,
+        total_epochs: usize,
+        total_items: usize,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            start_time: Instant::now(),
+            total_steps,
+            total_epochs,
+            total_items,
+            batch_size,
+            last_update: 0,
+            mode: "Training",
+        }
+    }
+
+    pub fn update(&mut self, metrics: &TrainingMetrics) -> io::Result<()> {
+        if metrics.total_steps - self.last_update < UPDATE_FREQUENCY && metrics.total_steps > 0 {
+            return Ok(());
+        }
+        self.last_update = metrics.total_steps;
+
+        execute!(
+            io::stdout(),
+            cursor::MoveToColumn(0),
+            Clear(ClearType::CurrentLine)
+        )?;
+
+        let elapsed = self.start_time.elapsed();
+        let mins = elapsed.as_secs() / 60;
+        let progress = (metrics.total_steps as f32 / self.total_steps as f32 * 100.0) as usize;
+
+        // Calculate items processed within the current epoch
+        let steps_in_epoch = metrics.total_steps % (self.total_items / self.batch_size);
+        let items_processed = steps_in_epoch * self.batch_size;
+        let items_processed = items_processed.min(self.total_items); // Cap at total items
+
+        print!(
+            "{} | Epoch: {}/{} | Step: {} | Items: {}/{} | ({} mins) | Loss: {:.4} - PPL: {:.4} | {}%",
+            self.mode,
+            metrics.total_epochs,
+            self.total_epochs,
+            metrics.total_steps,
+            items_processed,
+            self.total_items,
+            mins,
+            metrics.final_loss,
+            metrics.final_perplexity,
+            progress,
+        );
+
+        io::stdout().flush()?;
+        Ok(())
+    }
+
+    pub fn set_mode(&mut self, mode: &'static str) {
+        self.mode = mode;
+    }
 }

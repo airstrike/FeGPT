@@ -7,6 +7,7 @@ edition = "2021"
 burn = { version = "0.15.0", features = ["ndarray", "tch", "train", "wgpu"] }
 chrono = "0.4.38"
 clap = { version = "4.5.23", features = ["derive"] }
+crossterm = "0.28.1"
 derive-new = "0.7.0"
 rand = "0.8.5"
 serde = "1.0.215"

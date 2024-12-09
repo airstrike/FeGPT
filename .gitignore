@@ -1,3 +1,4 @@
+*.swp
 /target
 **.code-workspace
 /models
