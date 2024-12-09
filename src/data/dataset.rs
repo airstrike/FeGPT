@@ -79,7 +79,6 @@ impl LanguageModelDataset for WikiText2Dataset {
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 
-#[derive(new)]
 pub struct SubDataset<D> {
     dataset: D,
     limit: usize,
