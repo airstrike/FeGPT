@@ -75,3 +75,25 @@ impl LanguageModelDataset for WikiText2Dataset {
         self.dataset.get(index).map(|item| item.text)
     }
 }
+
+#[derive(new)]
+pub struct SubDataset<D> {
+    dataset: D,
+    limit: usize,
+}
+
+impl<D: burn::data::dataset::Dataset<LanguageModelItem>>
+    burn::data::dataset::Dataset<LanguageModelItem> for SubDataset<D>
+{
+    fn get(&self, index: usize) -> Option<LanguageModelItem> {
+        if index < self.limit {
+            self.dataset.get(index)
+        } else {
+            None
+        }
+    }
+
+    fn len(&self) -> usize {
+        std::cmp::min(self.dataset.len(), self.limit)
+    }
+}

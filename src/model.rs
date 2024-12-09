@@ -12,7 +12,7 @@ use burn::{
     tensor::TensorData,
     train::{ClassificationOutput, TrainOutput, TrainStep, ValidStep},
 };
-use rand::{thread_rng, Rng};
+use rand::Rng;
 
 #[derive(Config)]
 pub struct FeGPTConfig {
@@ -183,19 +183,18 @@ impl<B: Backend> FeGPT<B> {
         let device = probs.device();
         let [batch_size, vocab_size] = probs.dims();
 
-        // Convert to Vec<f32> for sampling
-        let probs: Vec<f32> = probs.to_data().to_vec().unwrap();
+        // Cast the f16 tensor to f32 before extracting the data
+        let raw_probs = probs.to_data().to_vec::<burn::tensor::f16>().unwrap();
+        let probs: Vec<f32> = raw_probs.iter().map(|x| x.to_f32()).collect();
 
-        let mut rng = thread_rng();
+        // The rest of the code remains the same
+        let mut rng = rand::thread_rng();
         let mut next_tokens = Vec::with_capacity(batch_size);
 
-        // Sample for each item in batch
         for batch_idx in 0..batch_size {
             let mut cumsum = 0.0;
             let rand_val: f32 = rng.gen();
-            let mut selected = (vocab_size - 1) as i64; // default to last token
-
-            // Get probabilities for this batch item
+            let mut selected = (vocab_size - 1) as i64;
             let batch_start = batch_idx * vocab_size;
             for token_idx in 0..vocab_size {
                 cumsum += probs[batch_start + token_idx];
@@ -205,11 +204,9 @@ impl<B: Backend> FeGPT<B> {
                 }
             }
 
-            // Convert to backend's integer element type
             next_tokens.push(selected.elem::<B::IntElem>());
         }
 
-        // Create tensor from the selected tokens, explicitly specifying dimensions and type
         Tensor::<B, 1, Int>::from_data(TensorData::from(next_tokens.as_slice()), &device)
             .reshape([batch_size, 1])
     }
