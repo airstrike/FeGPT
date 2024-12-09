@@ -29,31 +29,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Train {
             dataset,
-            subset,
             d_model,
             d_ff,
             n_layer,
             n_head,
             learning_rate,
             warmup_steps,
-            epochs,
+            block_size,
+            batch_size,
+            max_iters,
+            dropout,
+            compile,
             models_dir,
-            ..  // Handle any additional fields we haven't mapped yet
+            ..
         } => {
             let (_, _) = train(
                 &dataset,
-                subset,
                 d_model,
                 d_ff,
                 n_layer,
                 n_head,
                 learning_rate,
                 warmup_steps,
-                epochs,
+                block_size,
+                batch_size,
+                max_iters,
+                dropout,
+                compile,
                 &models_dir,
             )?;
             println!("Training completed!");
         }
+
         Commands::Generate {
             prompt,
             num_tokens,
@@ -63,18 +70,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             // Find model by ID or timestamp
             let config = session::find_model(&models_dir, &model)?;
-            
+
             // Initialize model using the saved config parameters
             let device = if cfg!(target_os = "macos") {
                 burn::tensor::Device::<Backend>::Mps
             } else {
                 burn::tensor::Device::<Backend>::Cuda(0)
             };
-        
+
             let tokenizer = Arc::new(GPTTokenizer::default());
             let vocab_size = tokenizer.vocab_size();
             let pad_token = tokenizer.pad_token();
-        
+
             let transformer_config = TransformerEncoderConfig::new(
                 config.get_d_model(),
                 config.get_d_ff(),
@@ -83,72 +90,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_norm_first(true)
             .with_dropout(0.1);
-        
+
             let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, 64);
             let mut model = model_config.init::<Backend>(&device);
-            
+
             // Load the trained weights
             let model_path = config.model_path(&models_dir);
             println!("Attempting to load model from: {}", model_path.display());
-        
+
             if !model_path.exists() {
                 return Err(format!("Model file not found at {}", model_path.display()).into());
             }
-        
+
             model = model
-                .load_file(
-                    model_path,
-                    &burn::record::CompactRecorder::new(),
-                    &device,
-                )
+                .load_file(model_path, &burn::record::CompactRecorder::new(), &device)
                 .expect("Failed to load model");
-        
+
             let generated = generate(&prompt, &model, &tokenizer, num_tokens, temperature);
             println!("Generated text:\n{}", generated);
         }
-        
-        Commands::List { models_dir } => {
-            // Try to create directory if it doesn't exist
-            if let Err(e) = fs::create_dir_all(&models_dir) {
-                println!("Cannot create directory at `{}`", models_dir);
-                return Err(Box::new(e));
-            }
-        
-            match session::list_trained_models(&models_dir) {
-                Ok(entries) => {
-                    println!("\nTrained models:");
-                    if entries.is_empty() {
-                        println!("No trained models found.");
-                    } else {
+
+        Commands::List { models_dir } => match session::list_trained_models(&models_dir) {
+            Ok(entries) => {
+                println!("\nTrained models:");
+                if entries.is_empty() {
+                    println!("No trained models found.");
+                } else {
+                    println!(
+                        "{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<6} {:<8} {:<6} {:<8}",
+                        "ID",
+                        "Timestamp",
+                        "Duration",
+                        "Layers",
+                        "d_model",
+                        "Heads",
+                        "Block",
+                        "Batch",
+                        "MaxIter",
+                        "Drop",
+                        "Compile",
+                    );
+                    println!("{}", "-".repeat(130));
+
+                    for entry in entries {
+                        let config = entry.config;
                         println!(
-                            "{:<4} {:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
-                            "ID", "Timestamp", "Duration", "Layers", "d_model", "Heads", "Epochs", "Subset"
+                            "{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<6} {:<8} {:<6.3} {:<8}",
+                            entry.id,
+                            config.get_timestamp(),
+                            config.get_duration().as_ref().map_or("", |d| d),
+                            config.get_n_layer(),
+                            config.get_d_model(),
+                            config.get_n_head(),
+                            config.get_block_size(),
+                            config.get_batch_size(),
+                            config.get_max_iters(),
+                            config.get_dropout(),
+                            config.get_compile(),
                         );
-                        println!("{}", "-".repeat(90));
-        
-                        for entry in entries {
-                            let config = entry.config;
-                            println!(
-                                "{:<4} {:<20} {:<15} {:<10} {:<10} {:<8} {:<8} {:<15}",
-                                entry.id,
-                                config.get_timestamp(),
-                                config.get_duration().as_ref().unwrap_or(&"".to_string()),
-                                config.get_n_layer(),
-                                config.get_d_model(),
-                                config.get_n_head(),
-                                config.get_epochs(),
-                                config.get_subset()
-                            );
-                        }
-                        println!("\nUse either ID or timestamp when generating text");
                     }
                 }
-                Err(e) => {
-                    println!("Error reading models from directory: {}", e);
-                    return Err(Box::new(e));
-                }
             }
-        }
+            Err(e) => {
+                println!("Error reading models from directory: {}", e);
+                return Err(Box::new(e));
+            }
+        },
     }
     Ok(())
 }
@@ -185,14 +192,17 @@ fn generate<B: burn::tensor::backend::Backend>(
 
 fn train(
     dataset_name: &str,
-    subset: bool,
     d_model: usize,
     d_ff: usize,
     n_layer: usize,
     n_head: usize,
     learning_rate: f64,
     warmup_steps: usize,
-    epochs: usize,
+    block_size: usize,
+    batch_size: usize,
+    max_iters: usize,
+    dropout: f64,
+    compile: bool,
     models_dir: &str,
 ) -> std::io::Result<(crate::model::FeGPT<Backend>, Arc<GPTTokenizer>)> {
     // Create config before training
@@ -203,8 +213,11 @@ fn train(
         n_head,
         learning_rate,
         warmup_steps,
-        epochs,
-        subset,
+        block_size,
+        batch_size,
+        max_iters,
+        dropout,
+        compile,
     );
 
     let start_time = std::time::Instant::now();
@@ -224,41 +237,35 @@ fn train(
 
     let transformer_config = TransformerEncoderConfig::new(d_model, d_ff, n_layer, n_head)
         .with_norm_first(true)
-        .with_dropout(0.1);
+        .with_dropout(dropout);
 
-    let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, 64);
+    let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, block_size);
 
-    let optimizer = AdamConfig::new()
-        .with_beta_2(0.99)
-        // .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(1.0e-6)))
-        .init();
+    let optimizer = AdamConfig::new().with_beta_2(0.99).init();
 
     let lr_scheduler = burn::lr_scheduler::noam::NoamLrSchedulerConfig::new(learning_rate)
         .with_warmup_steps(warmup_steps)
-        .with_model_size(128)
+        .with_model_size(d_model)
         .init();
 
     let dataset_train = DatasetType::new(dataset_name, "train");
     let dataset_test = DatasetType::new(dataset_name, "test");
-    let dataset_length = dataset_train.len();
 
-    let dataset_train = if subset {
-        SubDataset::new_with_seed(dataset_train, 50_000, Some(42))
-    } else {
-        SubDataset::new_with_seed(dataset_train, dataset_length, None)
-    };
+    // Calculate number of epochs based on max_iters and batch size
+    let total_batches = dataset_train.len() / batch_size;
+    let epochs = max_iters / total_batches + 1; // +1 to ensure we reach max_iters
 
-    let batcher_train = LanguageModelBatcher::new(tokenizer.clone(), device.clone(), 64);
-    let batcher_test = LanguageModelBatcher::new(tokenizer.clone(), device.clone(), 64);
+    let batcher_train = LanguageModelBatcher::new(tokenizer.clone(), device.clone(), block_size);
+    let batcher_test = LanguageModelBatcher::new(tokenizer.clone(), device.clone(), block_size);
 
     let dataloader_train = burn::data::dataloader::DataLoaderBuilder::new(batcher_train)
-        .batch_size(16)
+        .batch_size(batch_size)
         .shuffle(42)
         .num_workers(8)
         .build(dataset_train);
 
     let dataloader_test = burn::data::dataloader::DataLoaderBuilder::new(batcher_test)
-        .batch_size(16)
+        .batch_size(batch_size)
         .shuffle(42)
         .num_workers(8)
         .build(dataset_test);

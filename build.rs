@@ -23,5 +23,5 @@ fn main() {
     let torch_path = torch_paths.to_str().expect("Invalid path string");
 
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", torch_path);
-    println!("cargo:warning=Setting RPATH to: {}", torch_path);
+    // println!("cargo:warning=Setting RPATH to: {}", torch_path);
 }

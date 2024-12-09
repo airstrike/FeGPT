@@ -12,19 +12,15 @@ pub enum Commands {
     /// Train a new model
     Train {
         /// Dataset to use for training
-        #[arg(short, long, default_value = "aesop")]
+        #[arg(short, long, default_value = "shakespeare")]
         dataset: String,
 
-        /// Whether to use a subset of the data for quick testing
-        #[arg(short, long)]
-        subset: bool,
-
-        /// Model embedding dimension
-        #[arg(long, default_value_t = 192)]
+        /// Model embedding dimension (n_embd in nanoGPT)
+        #[arg(long, default_value_t = 128)]
         d_model: usize,
 
         /// Model feed-forward dimension
-        #[arg(long, default_value_t = 768)]
+        #[arg(long, default_value_t = 512)]
         d_ff: usize,
 
         /// Number of transformer layers
@@ -43,18 +39,31 @@ pub enum Commands {
         #[arg(long, default_value_t = 100)]
         warmup_steps: usize,
 
-        /// Number of epochs
-        #[arg(short, long, default_value_t = 5)]
-        epochs: usize,
+        /// Context length (block_size in nanoGPT)
+        #[arg(long, default_value_t = 64)]
+        block_size: usize,
 
-        /// Output directory for model artifacts
-        #[arg(short, long, default_value = "/tmp/fegpt")]
-        output_dir: String,
+        /// Batch size for training
+        #[arg(long, default_value_t = 12)]
+        batch_size: usize,
+
+        /// Maximum number of iterations
+        #[arg(long, default_value_t = 2000)]
+        max_iters: usize,
+
+        /// Dropout rate
+        #[arg(long, default_value_t = 0.0)]
+        dropout: f64,
+
+        /// Whether to use torch.compile()
+        #[arg(long, default_value_t = false)]
+        compile: bool,
 
         /// Directory to store models
         #[arg(long, default_value = "models")]
         models_dir: String,
     },
+
     /// Generate text using a trained model
     Generate {
         /// Prompt to start generation with

@@ -6,15 +6,18 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelConfig {
     timestamp: String,
-    d_model: usize,
-    d_ff: usize,
+    d_model: usize, // n_embd in nanoGPT
+    d_ff: usize,    // feed-forward dimension
     n_layer: usize,
     n_head: usize,
     learning_rate: f64,
     warmup_steps: usize,
-    epochs: usize,
-    subset: bool,
+    block_size: usize, // context length
+    batch_size: usize,
+    max_iters: usize,
+    dropout: f64,
     training_duration: Option<String>,
+    compile: bool,
 }
 
 impl ModelConfig {
@@ -25,8 +28,11 @@ impl ModelConfig {
         n_head: usize,
         learning_rate: f64,
         warmup_steps: usize,
-        epochs: usize,
-        subset: bool,
+        block_size: usize,
+        batch_size: usize,
+        max_iters: usize,
+        dropout: f64,
+        compile: bool,
     ) -> Self {
         Self {
             timestamp: Local::now().format("%Y%m%d_%H%M%S").to_string(),
@@ -36,9 +42,12 @@ impl ModelConfig {
             n_head,
             learning_rate,
             warmup_steps,
-            epochs,
-            subset,
+            block_size,
+            batch_size,
+            max_iters,
+            dropout,
             training_duration: None,
+            compile,
         }
     }
 
@@ -64,6 +73,26 @@ impl ModelConfig {
         Ok(())
     }
 
+    pub fn get_block_size(&self) -> usize {
+        self.block_size
+    }
+
+    pub fn get_batch_size(&self) -> usize {
+        self.batch_size
+    }
+
+    pub fn get_max_iters(&self) -> usize {
+        self.max_iters
+    }
+
+    pub fn get_dropout(&self) -> f64 {
+        self.dropout
+    }
+
+    pub fn get_compile(&self) -> bool {
+        self.compile
+    }
+
     pub fn get_timestamp(&self) -> &str {
         &self.timestamp
     }
@@ -86,14 +115,6 @@ impl ModelConfig {
 
     pub fn get_n_head(&self) -> usize {
         self.n_head
-    }
-
-    pub fn get_epochs(&self) -> usize {
-        self.epochs
-    }
-
-    pub fn get_subset(&self) -> bool {
-        self.subset
     }
 
     pub fn set_duration(&mut self, duration: String) {
