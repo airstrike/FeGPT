@@ -5,16 +5,18 @@ use burn::data::dataloader::Dataset;
 use burn::nn::transformer::TransformerEncoderConfig;
 use burn::optim::AdamConfig;
 use burn::prelude::*;
+use perplexity::PerplexityMetric;
 use std::fs;
 use std::sync::Arc;
 
-pub mod data;
-pub use data::tokenizer;
 pub mod cli;
+pub mod data;
 pub mod model;
+pub mod perplexity;
 pub mod session;
 
 use cli::*;
+pub use data::tokenizer;
 use data::*;
 use model::FeGPTConfig;
 use session::ModelConfig;
@@ -274,7 +276,9 @@ fn train(
 
     let learner = burn::train::LearnerBuilder::new(models_dir)
         .metric_train_numeric(burn::train::metric::LossMetric::new())
+        .metric_train_numeric(PerplexityMetric::default())
         .metric_valid_numeric(burn::train::metric::LossMetric::new())
+        .metric_valid_numeric(PerplexityMetric::default())
         .with_file_checkpointer(burn::record::CompactRecorder::new())
         .devices(vec![device.clone()])
         .num_epochs(epochs)
