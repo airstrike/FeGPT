@@ -2,10 +2,14 @@
 extern crate derive_new;
 
 use burn::data::dataloader::Dataset;
+use burn::lr_scheduler::LrScheduler;
+use burn::module::AutodiffModule;
 use burn::nn::transformer::TransformerEncoderConfig;
-use burn::optim::AdamConfig;
+use burn::optim::{AdamConfig, Optimizer};
 use burn::prelude::*;
-use perplexity::PerplexityMetric;
+use burn::train::metric::Adaptor;
+use burn::train::ClassificationOutput;
+use perplexity::PerplexityInput;
 use std::fs;
 use std::sync::Arc;
 
@@ -14,12 +18,13 @@ pub mod data;
 pub mod model;
 pub mod perplexity;
 pub mod session;
+pub mod utils;
 
 use cli::*;
 pub use data::tokenizer;
 use data::*;
 use model::FeGPTConfig;
-use session::ModelConfig;
+use session::{ModelConfig, TrainingMetrics};
 use tokenizer::GPTTokenizer;
 
 type Elem = burn::tensor::f16;
@@ -45,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             models_dir,
             ..
         } => {
-            let (_, _) = train(
+            let (_, _, metrics) = train(
                 &dataset,
                 d_model,
                 d_ff,
@@ -60,7 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 compile,
                 &models_dir,
             )?;
-            println!("Training completed!");
+            println!("\nTraining completed! Final metrics:");
+            println!("{}", "-".repeat(60));
+            println!("Training metrics:");
+            println!("  Loss:       {:.4}", metrics.final_loss);
+            println!("  Perplexity: {:.4}", metrics.final_perplexity);
+            println!("\nValidation metrics:");
+            println!("  Loss:       {:.4}", metrics.validation_loss);
+            println!("  Perplexity: {:.4}", metrics.validation_perplexity);
+            println!("\nTraining summary:");
+            println!("  Total epochs: {}", metrics.total_epochs);
+            println!("  Total steps:  {}", metrics.total_steps);
+            println!("{}", "-".repeat(60));
         }
 
         Commands::Generate {
@@ -118,39 +134,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if entries.is_empty() {
                     println!("No trained models found.");
                 } else {
-                    println!(
-                        "{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<6} {:<8} {:<6} {:<8}",
-                        "ID",
-                        "Timestamp",
-                        "Duration",
-                        "Layers",
-                        "d_model",
-                        "Heads",
-                        "Block",
-                        "Batch",
-                        "MaxIter",
-                        "Drop",
-                        "Compile",
+                    // Print header with more fields
+                    println!("{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<6} {:<8} {:<6} {:<8} {:<12} {:<12}", 
+                        "ID", "Timestamp", "Duration", "Layers", "d_model", "d_ff", "Heads", 
+                        "Block", "Batch", "MaxIter", "LR", "Warmup", "Drop", "Compile", "Loss", "Perplexity"
                     );
-                    println!("{}", "-".repeat(130));
+                    println!("{}", "-".repeat(180));
 
                     for entry in entries {
                         let config = entry.config;
                         println!(
-                            "{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<6} {:<8} {:<6.3} {:<8}",
+                            "{:<4} {:<20} {:<10} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<6.0e} {:<8} {:<6.3} {:<8} {:<12.4} {:<12.4}",
                             entry.id,
                             config.get_timestamp(),
                             config.get_duration().as_ref().map_or("", |d| d),
                             config.get_n_layer(),
                             config.get_d_model(),
+                            config.get_d_ff(),
                             config.get_n_head(),
                             config.get_block_size(),
                             config.get_batch_size(),
                             config.get_max_iters(),
+                            config.get_learning_rate(),
+                            config.get_warmup_steps(),
                             config.get_dropout(),
                             config.get_compile(),
+                            entry.metrics.as_ref().map_or(f64::NAN, |m| m.validation_loss),
+                            entry.metrics.as_ref().map_or(f64::NAN, |m| m.validation_perplexity),
                         );
                     }
+                    println!("\nNote: Loss and Perplexity shown are validation metrics");
                 }
             }
             Err(e) => {
@@ -206,7 +219,11 @@ fn train(
     dropout: f64,
     compile: bool,
     models_dir: &str,
-) -> std::io::Result<(crate::model::FeGPT<Backend>, Arc<GPTTokenizer>)> {
+) -> std::io::Result<(
+    crate::model::FeGPT<Backend>,
+    Arc<GPTTokenizer>,
+    TrainingMetrics,
+)> {
     // Create config before training
     let mut config = ModelConfig::new(
         d_model,
@@ -243,9 +260,9 @@ fn train(
 
     let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, block_size);
 
-    let optimizer = AdamConfig::new().with_beta_2(0.99).init();
+    let mut optimizer = AdamConfig::new().with_beta_2(0.99).init();
 
-    let lr_scheduler = burn::lr_scheduler::noam::NoamLrSchedulerConfig::new(learning_rate)
+    let mut lr_scheduler = burn::lr_scheduler::noam::NoamLrSchedulerConfig::new(learning_rate)
         .with_warmup_steps(warmup_steps)
         .with_model_size(d_model)
         .init();
@@ -272,26 +289,89 @@ fn train(
         .num_workers(8)
         .build(dataset_test);
 
-    let model = model_config.init::<Backend>(&device);
+    let mut model = model_config.init::<Backend>(&device);
 
-    let learner = burn::train::LearnerBuilder::new(models_dir)
-        .metric_train_numeric(burn::train::metric::LossMetric::new())
-        .metric_train_numeric(PerplexityMetric::default())
-        .metric_valid_numeric(burn::train::metric::LossMetric::new())
-        .metric_valid_numeric(PerplexityMetric::default())
-        .with_file_checkpointer(burn::record::CompactRecorder::new())
-        .devices(vec![device.clone()])
-        .num_epochs(epochs)
-        .build(model, optimizer, lr_scheduler);
+    let mut metrics = TrainingMetrics {
+        final_loss: f64::NAN,
+        final_perplexity: f64::NAN,
+        validation_loss: f64::NAN,
+        validation_perplexity: f64::NAN,
+        total_epochs: 0,
+        total_steps: 0,
+    };
 
-    let trained_model = learner.fit(dataloader_train, dataloader_test);
+    let mut step = 0;
+    for epoch in 0..epochs {
+        // Training loop
+        for batch in dataloader_train.iter() {
+            let output = model.forward(batch);
+            let loss = output.loss.clone();
 
-    // Update config with training duration and save
+            let grads = loss.backward();
+            let grads = burn::optim::GradientsParams::from_grads(grads, &model);
+            let grads = utils::clip_gradients(grads, &model, 1.0); // Using 1.0 as max_norm like nanoGPT
+            model = optimizer.step(learning_rate, model, grads);
+
+            // Update learning rate
+            lr_scheduler.step();
+
+            let perplexity_input =
+                <ClassificationOutput<Backend> as Adaptor<PerplexityInput>>::adapt(&output);
+
+            // Update metrics
+            metrics.final_loss = output.loss.clone().into_scalar().into();
+            metrics.final_perplexity = (perplexity_input.loss as f64).exp();
+            metrics.total_steps = step;
+
+            step += 1;
+            if step >= max_iters {
+                break;
+            }
+        }
+        metrics.total_epochs = epoch + 1;
+
+        // Validation loop
+        let model_valid = model.valid();
+        let mut val_losses = Vec::new();
+        let mut val_perplexities = Vec::new();
+
+        for batch in dataloader_test.iter() {
+            let output = model_valid.forward(batch);
+            val_losses.push(output.loss.clone().into_scalar().into());
+            let perplexity_input = <ClassificationOutput<burn::backend::LibTorch<Elem>> as Adaptor<PerplexityInput>>::adapt(&output);
+            val_perplexities.push((perplexity_input.loss as f64).exp());
+        }
+
+        // Calculate validation metrics
+        if !val_losses.is_empty() {
+            metrics.validation_loss = val_losses.iter().sum::<f64>() / val_losses.len() as f64;
+            metrics.validation_perplexity =
+                val_perplexities.iter().sum::<f64>() / val_perplexities.len() as f64;
+        }
+
+        println!(
+                "Epoch {}/{} - Step {} - Train Loss: {:.4} - Train PPL: {:.4} - Val Loss: {:.4} - Val PPL: {:.4}",
+                epoch + 1,
+                epochs,
+                step,
+                metrics.final_loss,
+                metrics.final_perplexity,
+                metrics.validation_loss,
+                metrics.validation_perplexity
+            );
+
+        if step >= max_iters {
+            break;
+        }
+    }
+
+    // Update config with training duration and save everything
     config.set_duration(format!("{:.2?}", start_time.elapsed()));
     config.save(models_dir)?;
+    config.save_metrics(models_dir, &metrics)?;
 
     // Save model with timestamp-based name
-    trained_model
+    model
         .clone()
         .save_file(
             config.model_path(models_dir),
@@ -299,5 +379,5 @@ fn train(
         )
         .expect("Failed to save model");
 
-    Ok((trained_model, tokenizer))
+    Ok((model, tokenizer, metrics))
 }

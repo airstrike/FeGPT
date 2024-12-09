@@ -20,6 +20,16 @@ pub struct ModelConfig {
     compile: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TrainingMetrics {
+    pub final_loss: f64,
+    pub final_perplexity: f64,
+    pub validation_loss: f64,
+    pub validation_perplexity: f64,
+    pub total_epochs: usize,
+    pub total_steps: usize,
+}
+
 impl ModelConfig {
     pub fn new(
         d_model: usize,
@@ -61,6 +71,17 @@ impl ModelConfig {
 
     pub fn config_path(&self, models_dir: &str) -> PathBuf {
         self.model_dir(models_dir).join("model.json")
+    }
+
+    pub fn metrics_path(&self, models_dir: &str) -> PathBuf {
+        self.model_dir(models_dir).join("metrics.json")
+    }
+
+    pub fn save_metrics(&self, models_dir: &str, metrics: &TrainingMetrics) -> std::io::Result<()> {
+        let metrics_path = self.metrics_path(models_dir);
+        let metrics_str = serde_json::to_string_pretty(metrics)?;
+        fs::write(metrics_path, metrics_str)?;
+        Ok(())
     }
 
     pub fn save(&self, models_dir: &str) -> std::io::Result<()> {
@@ -117,6 +138,14 @@ impl ModelConfig {
         self.n_head
     }
 
+    pub fn get_learning_rate(&self) -> f64 {
+        self.learning_rate
+    }
+
+    pub fn get_warmup_steps(&self) -> usize {
+        self.warmup_steps
+    }
+
     pub fn set_duration(&mut self, duration: String) {
         self.training_duration = Some(duration);
     }
@@ -126,11 +155,12 @@ impl ModelConfig {
 pub struct ModelEntry {
     pub id: usize,
     pub config: ModelConfig,
+    pub metrics: Option<TrainingMetrics>,
 }
 
 pub fn list_trained_models(models_dir: &str) -> std::io::Result<Vec<ModelEntry>> {
     let models_path = PathBuf::from(models_dir);
-    let mut configs = Vec::<ModelConfig>::new();
+    let mut entries = Vec::new();
 
     for entry in fs::read_dir(models_path)? {
         let entry = entry?;
@@ -142,10 +172,20 @@ pub fn list_trained_models(models_dir: &str) -> std::io::Result<Vec<ModelEntry>>
                 .map_or(false, |n| n.starts_with("model_"))
         {
             let config_path = path.join("model.json");
+            let metrics_path = path.join("metrics.json");
+
             if config_path.exists() {
                 if let Ok(content) = fs::read_to_string(&config_path) {
-                    if let Ok(config) = serde_json::from_str(&content) {
-                        configs.push(config);
+                    if let Ok(config) = serde_json::from_str::<ModelConfig>(&content) {
+                        let metrics = if metrics_path.exists() {
+                            fs::read_to_string(&metrics_path)
+                                .ok()
+                                .and_then(|content| serde_json::from_str(&content).ok())
+                        } else {
+                            None
+                        };
+
+                        entries.push((config, metrics));
                     }
                 }
             }
@@ -153,13 +193,17 @@ pub fn list_trained_models(models_dir: &str) -> std::io::Result<Vec<ModelEntry>>
     }
 
     // Sort by timestamp, newest first
-    configs.sort_by(|a, b| b.get_timestamp().cmp(a.get_timestamp()));
+    entries.sort_by(|(a, _), (b, _)| b.get_timestamp().cmp(a.get_timestamp()));
 
     // Create ModelEntries with IDs
-    Ok(configs
+    Ok(entries
         .into_iter()
         .enumerate()
-        .map(|(id, config)| ModelEntry { id, config })
+        .map(|(id, (config, metrics))| ModelEntry {
+            id,
+            config,
+            metrics,
+        })
         .collect())
 }
 

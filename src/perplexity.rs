@@ -10,7 +10,7 @@ pub struct PerplexityMetric {
 
 #[derive(Debug)]
 pub struct PerplexityInput {
-    loss: f64,
+    pub loss: f64,
 }
 
 impl Default for PerplexityMetric {
