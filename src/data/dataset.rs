@@ -76,24 +76,74 @@ impl LanguageModelDataset for WikiText2Dataset {
     }
 }
 
+use rand::seq::SliceRandom;
+use rand::SeedableRng;
+
 #[derive(new)]
 pub struct SubDataset<D> {
     dataset: D,
     limit: usize,
+    indices: Vec<usize>, // Store our sampled indices
 }
 
-impl<D: burn::data::dataset::Dataset<LanguageModelItem>>
-    burn::data::dataset::Dataset<LanguageModelItem> for SubDataset<D>
-{
-    fn get(&self, index: usize) -> Option<LanguageModelItem> {
-        if index < self.limit {
-            self.dataset.get(index)
-        } else {
-            None
+impl<D> SubDataset<D> {
+    pub fn new_with_seed(dataset: D, limit: usize, seed: Option<u64>) -> Self
+    where
+        D: Dataset<LanguageModelItem>,
+    {
+        // Create range of all possible indices
+        let mut indices: Vec<usize> = (0..dataset.len()).collect();
+
+        // If limit is larger than dataset, use whole dataset
+        let limit = std::cmp::min(limit, dataset.len());
+
+        // Shuffle with provided seed or random seed
+        let mut rng = match seed {
+            Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
+
+        indices.shuffle(&mut rng);
+
+        // Take only the first 'limit' indices
+        indices.truncate(limit);
+
+        // Sort indices for more efficient access patterns
+        indices.sort_unstable();
+
+        Self {
+            dataset,
+            limit,
+            indices,
         }
     }
 
+    // Resample the indices (useful for epoch transitions if desired)
+    pub fn resample(&mut self, seed: Option<u64>)
+    where
+        D: Dataset<LanguageModelItem>,
+    {
+        let mut indices: Vec<usize> = (0..self.dataset.len()).collect();
+        let mut rng = match seed {
+            Some(s) => rand::rngs::StdRng::seed_from_u64(s),
+            None => rand::rngs::StdRng::from_entropy(),
+        };
+        indices.shuffle(&mut rng);
+        indices.truncate(self.limit);
+        indices.sort_unstable();
+        self.indices = indices;
+    }
+}
+
+impl<D: Dataset<LanguageModelItem>> Dataset<LanguageModelItem> for SubDataset<D> {
+    fn get(&self, index: usize) -> Option<LanguageModelItem> {
+        if index >= self.limit {
+            return None;
+        }
+        self.dataset.get(self.indices[index])
+    }
+
     fn len(&self) -> usize {
-        std::cmp::min(self.dataset.len(), self.limit)
+        self.limit
     }
 }

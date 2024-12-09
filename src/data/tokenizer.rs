@@ -1,5 +1,7 @@
 // data/tokenizer.rs
 use tokenizers::Tokenizer as HfTokenizer;
+mod character;
+pub use character::CharTokenizer;
 
 #[allow(dead_code)]
 pub trait Tokenizer: Send + Sync {

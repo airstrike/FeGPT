@@ -1,4 +1,4 @@
-use crate::data::LanguageModelTrainingBatch;
+use crate::data::TrainingBatch;
 use burn::{
     nn::{
         attention::generate_autoregressive_mask,
@@ -23,27 +23,6 @@ pub struct FeGPTConfig {
 }
 
 impl FeGPTConfig {
-    // This bit commented out because #[derive(Config)] from burn already
-    // creates a `new` function for us.
-    //
-    // pub fn new(vocab_size: usize, pad_token: usize, max_seq_length: usize) -> Self {
-    //     // Configure for 4 layers, 4 heads, embedding dim 128
-    //     let transformer = TransformerEncoderConfig::new(
-    //         128, // d_model (embedding dimension)
-    //         512, // d_ff (feed forward dimension = 4x embedding dim)
-    //         4,   // n_layer
-    //         4,   // n_head
-    //     )
-    //     .with_norm_first(true); // Pre-norm architecture like GPT
-
-    //     Self {
-    //         transformer,
-    //         vocab_size,
-    //         pad_token,
-    //         max_seq_length,
-    //     }
-    // }
-
     pub fn init<B: Backend>(&self, device: &B::Device) -> FeGPT<B> {
         let output = LinearConfig::new(self.transformer.d_model, self.vocab_size).init(device);
         let transformer = self.transformer.init(device);
@@ -76,7 +55,7 @@ pub struct FeGPT<B: Backend> {
 }
 
 impl<B: Backend> FeGPT<B> {
-    pub fn forward(&self, item: LanguageModelTrainingBatch<B>) -> ClassificationOutput<B> {
+    pub fn forward(&self, item: TrainingBatch<B>) -> ClassificationOutput<B> {
         let [batch_size, seq_length] = item.tokens_inputs.dims();
         let device = &self.devices()[0];
 
@@ -212,18 +191,16 @@ impl<B: Backend> FeGPT<B> {
     }
 }
 
-impl<B: AutodiffBackend> TrainStep<LanguageModelTrainingBatch<B>, ClassificationOutput<B>>
-    for FeGPT<B>
-{
-    fn step(&self, item: LanguageModelTrainingBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
+impl<B: AutodiffBackend> TrainStep<TrainingBatch<B>, ClassificationOutput<B>> for FeGPT<B> {
+    fn step(&self, item: TrainingBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
         let item = self.forward(item);
         let grads = item.loss.backward();
         TrainOutput::new(self, grads, item)
     }
 }
 
-impl<B: Backend> ValidStep<LanguageModelTrainingBatch<B>, ClassificationOutput<B>> for FeGPT<B> {
-    fn step(&self, item: LanguageModelTrainingBatch<B>) -> ClassificationOutput<B> {
+impl<B: Backend> ValidStep<TrainingBatch<B>, ClassificationOutput<B>> for FeGPT<B> {
+    fn step(&self, item: TrainingBatch<B>) -> ClassificationOutput<B> {
         self.forward(item)
     }
 }

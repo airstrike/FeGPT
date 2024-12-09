@@ -10,34 +10,30 @@ pub struct LanguageModelBatcher<B: Backend> {
 }
 
 #[derive(Debug, Clone, new)]
-pub struct LanguageModelTrainingBatch<B: Backend> {
+pub struct TrainingBatch<B: Backend> {
     pub tokens_inputs: Tensor<B, 2, Int>, // Input token IDs [batch_size, seq_len]
     pub targets: Tensor<B, 2, Int>,       // Target token IDs [batch_size, seq_len]
     pub mask_pad: Tensor<B, 2, Bool>,     // Attention mask [batch_size, seq_len]
 }
 
-impl<B: Backend> Batcher<LanguageModelItem, LanguageModelTrainingBatch<B>>
-    for LanguageModelBatcher<B>
-{
-    fn batch(&self, items: Vec<LanguageModelItem>) -> LanguageModelTrainingBatch<B> {
-        let mut tokens_list = Vec::with_capacity(items.len());
+impl<B: Backend> Batcher<LanguageModelItem, TrainingBatch<B>> for LanguageModelBatcher<B> {
+    fn batch(&self, items: Vec<LanguageModelItem>) -> TrainingBatch<B> {
+        // Tokenize items if not in cache
+        let batch_tokens: Vec<Vec<usize>> = items
+            .iter()
+            .map(|item| self.tokenizer.encode(&item.text, true))
+            .collect();
 
-        // Tokenize all texts
-        for item in items {
-            tokens_list.push(self.tokenizer.encode(&item.text, true));
-        }
-
-        // Generate padding mask and get padded tokens
+        // Generate padding mask
         let mask = generate_padding_mask(
             self.tokenizer.pad_token(),
-            tokens_list,
+            batch_tokens,
             Some(self.block_size),
             &self.device,
         );
 
         let [batch_size, seq_length] = mask.tensor.dims();
 
-        // Create input and target sequences (shifted by 1)
         let input_ids = mask
             .tensor
             .clone()
@@ -45,7 +41,7 @@ impl<B: Backend> Batcher<LanguageModelItem, LanguageModelTrainingBatch<B>>
         let target_ids = mask.tensor.slice([0..batch_size, 1..seq_length]);
         let mask_pad = mask.mask.slice([0..batch_size, 0..seq_length - 1]);
 
-        LanguageModelTrainingBatch::new(
+        TrainingBatch::new(
             input_ids.to_device(&self.device),
             target_ids.to_device(&self.device),
             mask_pad.to_device(&self.device),
@@ -54,8 +50,8 @@ impl<B: Backend> Batcher<LanguageModelItem, LanguageModelTrainingBatch<B>>
 }
 
 // For inference, we can use string input directly
-impl<B: Backend> Batcher<String, LanguageModelTrainingBatch<B>> for LanguageModelBatcher<B> {
-    fn batch(&self, items: Vec<String>) -> LanguageModelTrainingBatch<B> {
+impl<B: Backend> Batcher<String, TrainingBatch<B>> for LanguageModelBatcher<B> {
+    fn batch(&self, items: Vec<String>) -> TrainingBatch<B> {
         let mut tokens_list = Vec::with_capacity(items.len());
 
         // Tokenize each string
@@ -81,7 +77,7 @@ impl<B: Backend> Batcher<String, LanguageModelTrainingBatch<B>> for LanguageMode
         let target_ids = mask.tensor.slice([0..batch_size, 1..seq_length]);
         let mask_pad = mask.mask.slice([0..batch_size, 0..seq_length - 1]);
 
-        LanguageModelTrainingBatch::new(
+        TrainingBatch::new(
             input_ids.to_device(&self.device),
             target_ids.to_device(&self.device),
             mask_pad.to_device(&self.device),
