@@ -161,9 +161,8 @@ impl<B: Backend> FeGPT<B> {
         let device = probs.device();
         let [batch_size, vocab_size] = probs.dims();
 
-        // Cast the f16 tensor to f32 before extracting the data
-        let raw_probs = probs.to_data().to_vec::<burn::tensor::f16>().unwrap();
-        let probs: Vec<f32> = raw_probs.iter().map(|x| x.to_f32()).collect();
+        let raw_probs = probs.to_data().to_vec::<f32>().unwrap();
+        let probs: Vec<f32> = raw_probs.iter().copied().collect();
 
         let mut rng = rand::thread_rng();
         let mut next_tokens = Vec::with_capacity(batch_size);

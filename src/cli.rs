@@ -12,7 +12,7 @@ pub enum Commands {
     /// Train a new model
     Train {
         /// Dataset to use for training
-        #[arg(short, long, default_value = "shakespeare")]
+        #[arg(short, long, default_value = "wikitext")]
         dataset: String,
 
         /// Model embedding dimension (n_embd in nanoGPT)

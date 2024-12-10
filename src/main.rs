@@ -27,7 +27,7 @@ use perplexity::PerplexityInput;
 use session::{ModelConfig, TrainingMetrics};
 use tokenizer::GPTTokenizer;
 
-type Elem = burn::tensor::f16;
+type Elem = f32;
 type Backend = burn::backend::Autodiff<burn::backend::LibTorch<Elem>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -106,8 +106,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.get_n_layer(),
                 config.get_n_head(),
             )
-            .with_norm_first(true)
-            .with_dropout(0.1);
+            .with_norm_first(false)
+            .with_dropout(config.get_dropout());
 
             let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, 64);
             let mut model = model_config.init::<Backend>(&device);
@@ -255,7 +255,7 @@ fn train(
     let pad_token = tokenizer.pad_token();
 
     let transformer_config = TransformerEncoderConfig::new(d_model, d_ff, n_head, n_layer)
-        .with_norm_first(true)
+        .with_norm_first(false)
         .with_dropout(dropout);
 
     let model_config = FeGPTConfig::new(transformer_config, vocab_size, pad_token, block_size);
